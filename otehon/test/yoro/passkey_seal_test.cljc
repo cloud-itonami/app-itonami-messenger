@@ -43,7 +43,7 @@
             payload {:id "message-1" :thread "thread-1" :author sender :text "hello" :sent-at 100}
             host {:recipient-host recipient-host :request! request! :resource resource :now! clock :sender sender
                   :policy! (fn [] {:roots #{(ed/public-key seed)} :revoked #{} :fresh-until 150
-                                    :bindings {sender (:recipient-key sender-key)}})}
+                                    :bindings {holder (:recipient-key identity) sender (:recipient-key sender-key)}})}
             nonce (edge/b64url->bytes (:nonce issued))]
         (-> (denied #(message/prepare-passkey-seal! host (assoc payload :author "did:key:wrong") nonce (:pub identity) (:pq-pub identity) presentation others))
             (.then (fn [_] (check (zero? @calls))
