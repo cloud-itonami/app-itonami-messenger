@@ -2,7 +2,8 @@
   "Bounded local Yoro message envelope composition. The trusted host owns
    authenticated identities, current dango policy and signed object admission.
    This namespace performs no network, consent or key discovery."
-  (:require [awai.browser-authorized-envelope :as envelope]))
+  (:require [awai.browser-authorized-envelope :as envelope]
+            [awai.browser-recipient-envelope :as recipient-envelope]))
 
 (defn refuse [] (throw (ex-info "private message refused" {})))
 (defn text? [x n] (and (string? x) (<= 1 (count x) n)))
@@ -10,6 +11,25 @@
   (and (map? m) (= #{:id :thread :author :text :sent-at} (set (keys m)))
        (text? (:id m) 128) (text? (:thread m) 128) (text? (:author m) 256)
        (text? (:text m) 32000) (js/Number.isSafeInteger (:sent-at m)) (<= 0 (:sent-at m))))
+
+(defn prepare-passkey-seal!
+  "Prepare an authenticated recipient proof. Trusted host displays sender,
+   complete recipients and operation, then invokes :confirm! in a direct user
+   gesture. This does not supply network consent or delivery."
+  [host message nonce pub pq-pub presentation others]
+  (when-not (and (map? host) (text? (:sender host) 256) (text? (:resource host) 256)
+                 (map? (:recipient-host host)) (message? message) (= (:sender host) (:author message))
+                 (vector? others) (every? map? others)) (refuse))
+  (let [ids (conj (set (map :holder others)) (get-in host [:recipient-host :holder]))]
+    (when-not (and (= (count ids) (inc (count others))) (contains? ids (:sender host))) (refuse))
+    (-> (recipient-envelope/prepare! host nonce pub pq-pub presentation others)
+        (.then (fn [prepared]
+          (when-not (= ids (set (:recipients prepared))) (refuse))
+          (assoc (dissoc prepared :confirm!) :confirm!
+            (fn []
+              (let [plain (.encode (js/TextEncoder.) (js/JSON.stringify (clj->js message)))]
+                (try (-> ((:confirm! prepared) plain) (.finally (fn [] (.fill plain 0))))
+                     (catch :default e (.fill plain 0) (throw e)))))))))))
 
 (defn seal!
   "Seal the entire message for the explicit authorized recipients. host's
