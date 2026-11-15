@@ -11,7 +11,7 @@ apex=$(cd "$1" && pwd -P)
 kotoba=$(cd "$2" && pwd -P)
 kbb=$(cd "$3" && pwd -P)
 root=$(CDPATH='' cd "$(dirname "$0")/.." && pwd -P)
-apex_rev=26040145ed0ef6da8985a46d9b4b99a7ddc552c1
+apex_rev=8b468fd33f0b316fc06fd01a8838e120322e4add
 kotoba_rev=b7d31a1ee3aafdb4c33dd9f7d6b94ae423393b64
 kbb_rev=1675e6aab65d5a99e37840cc5012bc2eca6f4a07
 
