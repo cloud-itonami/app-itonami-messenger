@@ -25,7 +25,7 @@
                        {:roots (:roots policy) :revoked #{}
                         :request {:req/kind :data/read :req/resource resource :req/holder reader :req/now 100}})
             revoked-cid (first (:dango/cids decision))
-            expected {:resource resource :recipients #{sender reader} :author sender}
+            expected {:resource resource :recipients #{sender reader} :author sender :thread "t1" :id "m1"}
             admit {:admit! (fn [e _] (= e expected))}]
         (-> (message/seal! host msg recipients)
             (.then (fn [sealed]
@@ -45,6 +45,9 @@
                                      (aset chunk 0 (bit-xor 1 (aget chunk 0)))
                                      (message/open! admit (assoc sealed :chunks [chunk]) expected reader (select-keys b [:priv :pq-priv]))))
                           (denied #(message/open! admit sealed (assoc expected :author reader) reader (select-keys b [:priv :pq-priv])))
+                          (denied #(message/open! {:admit! (fn [_ _] true)} sealed (assoc expected :id "other") reader (select-keys b [:priv :pq-priv])))
+                          (denied #(message/open! {:admit! (fn [_ _] true)} sealed (assoc expected :thread "other") reader (select-keys b [:priv :pq-priv])))
+                          (denied #(message/open! {:admit! (fn [_ _] true)} sealed (dissoc expected :id) reader (select-keys b [:priv :pq-priv])))
                           (denied #(message/open! admit sealed expected reader (select-keys a [:priv :pq-priv])))]))))))))))
     (.then (fn [_] (println (js/JSON.stringify #js {:passed true :scope "synthetic Yoro private message and policy"}))))
     (.catch (fn [e] (js/console.error e) (set! (.-exitCode js/process) 1))))

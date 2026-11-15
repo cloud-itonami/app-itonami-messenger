@@ -27,12 +27,12 @@
 
 (defn open!
   "expected and host :admit! must be authenticated independently of storage.
-   expected :author comes from that verified basis; admission must check its
-   signature, object, recipients and current policy."
+   expected author, thread and message ID come from that verified basis;
+   admission checks its signature, object, recipients and current policy."
   [host object expected recipient identity]
   (when-not (and (map? host) (fn? (:admit! host))
-                 (map? expected) (= #{:resource :recipients :author} (set (keys expected)))
-                 (text? (:author expected) 256)) (refuse))
+                 (map? expected) (= #{:resource :recipients :author :thread :id} (set (keys expected)))
+                 (text? (:author expected) 256) (text? (:thread expected) 128) (text? (:id expected) 128)) (refuse))
   (let [admit! (:admit! host)
         scoped-host (assoc host :admit! (fn [_ candidate] (admit! expected candidate)))]
   (-> (envelope/open scoped-host object (select-keys expected [:resource :recipients]) recipient identity)
@@ -40,6 +40,7 @@
         (try
           (let [decoded (.decode (js/TextDecoder. "utf-8" #js {:fatal true}) plain)
                 message (js->clj (js/JSON.parse decoded) :keywordize-keys true)]
-            (when-not (and (message? message) (= (:author expected) (:author message))) (refuse))
+            (when-not (and (message? message) (= (:author expected) (:author message))
+                           (= (:thread expected) (:thread message)) (= (:id expected) (:id message))) (refuse))
             message)
           (finally (.fill plain 0))))))))
