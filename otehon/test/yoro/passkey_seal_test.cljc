@@ -1,5 +1,5 @@
 (ns yoro.passkey-seal-test
-  (:require ["node:crypto" :as crypto] ["node:fs" :as fs] ["node:path" :as path]
+  (:require ["node:crypto" :as crypto] ["node:fs" :as fs] ["node:path" :as path] ["node:http" :as http]
             [yoro.private-message :as message] [yoro.otehon-delivery-host :as delivery]
             [awai.browser-shared-object :as wire] [multiformats.core :as mf]
             [awai.passkey-store :as store] [awai.recipient-proof-store :as persisted] [awai.otehon-passkey :as otehon]
@@ -15,8 +15,24 @@
 (persisted/initialize! db)
 (def resource "kotoba://storage/browser-recipient")
 (def seed (vec (repeat 32 3)))
-(-> (js/Promise.all #js [(virtual/create! "awai.network") (keys/generate-identity) (keys/generate-identity)])
-    (.then (fn [[auth identity sender-key]]
+(def stored (atom nil)) (def allowed (atom nil)) (def writes (atom 0)) (def operations (atom []))
+(def server (http/createServer
+  (fn [req res]
+    (if (not= (.-url req) (str "/private-ipld/" @allowed))
+      (do (.writeHead res 404) (.end res))
+      (if (= "PUT" (.-method req))
+        (let [parts (atom [])]
+          (.on req "data" #(swap! parts conj %))
+          (.on req "end" (fn []
+            (check (= "Biscuit synthetic" (aget (.-headers req) "authorization")))
+            (reset! stored (js/Buffer.concat (clj->js @parts))) (swap! writes inc)
+            (.writeHead res 201) (.end res))))
+        (if (and (= "GET" (.-method req)) @stored) (.end res @stored)
+          (do (.writeHead res 404) (.end res))))))))
+(def peer (js/Promise. (fn [resolve reject] (.once server "error" reject)
+  (.listen server 0 "127.0.0.1" #(resolve (str "http://127.0.0.1:" (.-port (.address server))))))))
+(-> (js/Promise.all #js [(virtual/create! "awai.network") (keys/generate-identity) (keys/generate-identity) peer])
+    (.then (fn [[auth identity sender-key origin]]
       (let [pub (edge/bytes->b64 (:public-key auth)) holder (otehon/account-did pub)
             _ (store/enroll-trusted! db {:credential-id (:credential-id auth) :public-key-b64 pub
                                          :holder holder :fingerprint (:recipient-key identity) :sign-count 0})
@@ -42,7 +58,7 @@
                                  :grant {:caps #{[:data/read resource]} :holder sender :before 200} :caveats []}))
             others [{:holder sender :presentation sender-presentation :pub (:pub sender-key) :pq-pub (:pq-pub sender-key)}]
             payload {:id "message-1" :thread "thread-1" :author sender :text "hello" :sent-at 100}
-            revoked (atom #{}) stored (atom nil) allowed (atom nil) writes (atom 0)
+            revoked (atom #{})
             expected {:resource resource :recipients #{holder sender} :author sender :thread "thread-1" :id "message-1"}
             byte-count (.-length (.encode (js/TextEncoder.) (js/JSON.stringify (clj->js payload))))
             host (delivery/bind!
@@ -57,9 +73,11 @@
                     :admit! (fn [basis _] (= expected basis))
                     :authorization! (fn [_] (js/Promise.resolve "Biscuit synthetic"))}
                    db (:credential-id auth) holder)
-            client {:put-block! (fn [cid bytes authz] (check (= authz "Biscuit synthetic"))
-                                  (swap! writes inc) (reset! stored (js/Uint8Array.from bytes)) (js/Promise.resolve cid))
-                    :get-block (fn [_] (js/Promise.resolve (js/Uint8Array.from @stored)))}
+            controller (js/AbortController.)
+            broker #js {:invoke (fn [selector request options]
+                      (swap! operations conj [(.-operation selector) (.. request -init -method)])
+                      (js/fetch (.-input request) (js/Object.assign #js {:redirect "error" :signal (.-signal options)} (.-init request))))}
+            client (delivery/client! origin broker #js {:operation "get"} #js {:operation "put"} (.-signal controller) true)
             nonce (edge/b64url->bytes (:nonce issued))]
         (-> (denied #(message/prepare-passkey-seal! host (assoc payload :author "did:key:wrong") nonce (:pub identity) (:pq-pub identity) presentation others))
             (.then (fn [_] (check (zero? @calls))
@@ -72,15 +90,16 @@
                     (.then (fn [sealed]
                       (reset! allowed (mf/cidv1-raw (wire/encode sealed)))
                       (message/publish! host client sealed expected)))
-                    (.then (fn [cid] (check (= 1 @writes))
+                    (.then (fn [cid] (check (= 1 @writes)) (check (not (.includes @stored (js/Buffer.from "hello"))))
                       (message/receive! host client cid expected holder identity)))
-                    (.then (fn [opened] (check (= payload opened))
+                    (.then (fn [opened] (check (= payload opened)) (check (= [["put" "PUT"] ["get" "GET"]] @operations))
                       (let [decision (dango/verify presentation {:roots #{(ed/public-key seed)} :revoked #{}
                            :request {:req/kind :data/read :req/resource resource :req/holder holder :req/now 100 :req/bytes byte-count}})]
                         (reset! revoked #{(first (:dango/cids decision))}))
                       (denied #(message/receive! host client @allowed expected holder identity))))
                     (.then (fn [_] (reset! revoked #{}) (check (store/revoke! db (:credential-id auth)))
                       (denied #(message/receive! host client @allowed expected holder identity))))
-                    (.then (fn [_] (denied #((:confirm! prepared)))))))))))))
-    (.then (fn [_] (.close db) (println (js/JSON.stringify #js {:passed true :scope "synthetic Yoro sender and recipient Passkey proof"}))))
-    (.catch (fn [e] (.close db) (js/console.error e) (set! (.-exitCode js/process) 1))))
+                    (.then (fn [_] (check (= 2 (count @operations))) (.abort controller)
+                      (denied #((:confirm! prepared)))))))))))))
+    (.then (fn [_] (.close server) (.close db) (println (js/JSON.stringify #js {:passed true :scope "Yoro virtual Passkey and loopback Kotobase delivery"}))))
+    (.catch (fn [e] (.close server) (.close db) (js/console.error e) (set! (.-exitCode js/process) 1))))
