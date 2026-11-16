@@ -11,7 +11,7 @@ apex=$(cd "$1" && pwd -P)
 kotoba=$(cd "$2" && pwd -P)
 kbb=$(cd "$3" && pwd -P)
 root=$(CDPATH='' cd "$(dirname "$0")/.." && pwd -P)
-apex_rev=9c7c68898ca9c806884df19a52801213b4d5bdb5
+apex_rev=4830419852e81f29beced23477ed3fa92a4123d1
 kotoba_rev=b7d31a1ee3aafdb4c33dd9f7d6b94ae423393b64
 kbb_rev=1675e6aab65d5a99e37840cc5012bc2eca6f4a07
 
@@ -22,6 +22,7 @@ git -C "$apex" diff --cached --quiet
 git -C "$kbb" diff --quiet
 git -C "$kbb" diff --cached --quiet
 git -C "$kotoba" cat-file -e "$kotoba_rev^{commit}"
+git -C "$kotoba" cat-file -e 'b2ae9f9fa598bc1b9a7462b68f93571af8540570^{commit}'
 
 mkdir -p "$root/.agent-output/.agent-output"
 out=$(mktemp -d "$root/.agent-output/yoro-check.XXXXXX")
