@@ -3,7 +3,8 @@
    authenticated identities, current dango policy and signed object admission.
    This namespace performs no network, consent or key discovery."
   (:require [awai.browser-authorized-envelope :as envelope]
-            [awai.browser-recipient-envelope :as recipient-envelope]))
+            [awai.browser-recipient-envelope :as recipient-envelope]
+            [awai.private-message-blocks :as blocks]))
 
 (defn refuse [] (throw (ex-info "private message refused" {})))
 (defn text? [x n] (and (string? x) (<= 1 (count x) n)))
@@ -11,6 +12,13 @@
   (and (map? m) (= #{:id :thread :author :text :sent-at} (set (keys m)))
        (text? (:id m) 128) (text? (:thread m) 128) (text? (:author m) 256)
        (text? (:text m) 32000) (js/Number.isSafeInteger (:sent-at m)) (<= 0 (:sent-at m))))
+
+(defn- expected? [expected]
+  (and (map? expected) (= #{:resource :recipients :author :thread :id} (set (keys expected)))
+       (text? (:resource expected) 256) (set? (:recipients expected))
+       (<= 1 (count (:recipients expected)) 32) (every? #(text? % 256) (:recipients expected))
+       (text? (:author expected) 256) (contains? (:recipients expected) (:author expected))
+       (text? (:thread expected) 128) (text? (:id expected) 128)))
 
 (defn prepare-passkey-seal!
   "Prepare an authenticated recipient proof. Trusted host displays sender,
@@ -51,8 +59,7 @@
    admission checks its signature, object, recipients and current policy."
   [host object expected recipient identity]
   (when-not (and (map? host) (fn? (:admit! host))
-                 (map? expected) (= #{:resource :recipients :author :thread :id} (set (keys expected)))
-                 (text? (:author expected) 256) (text? (:thread expected) 128) (text? (:id expected) 128)) (refuse))
+                 (expected? expected)) (refuse))
   (let [admit! (:admit! host)
         scoped-host (assoc host :admit! (fn [_ candidate] (admit! expected candidate)))]
   (-> (envelope/open scoped-host object (select-keys expected [:resource :recipients]) recipient identity)
@@ -64,3 +71,25 @@
                            (= (:thread expected) (:thread message)) (= (:id expected) (:id message))) (refuse))
             message)
           (finally (.fill plain 0))))))))
+
+(defn publish!
+  "Publish an already sealed message only against the host-authenticated
+   message basis. The client and per-operation consent belong to the trusted
+   runtime; this does not discover recipients or establish a signed basis."
+  [host client object expected]
+  (when-not (expected? expected) (refuse))
+  (blocks/publish! host client object expected))
+
+(defn receive!
+  "Receive and open an exact host-authenticated message. Recheck the CID and
+   delivery authority around decryption; denial releases no plaintext."
+  [host client cid expected recipient identity]
+  (when-not (and (expected? expected) (map? host) (fn? (:delivery-current! host))
+                 (fn? (:admit-cid! host)) (fn? (:admit! host))) (refuse))
+  (-> (blocks/receive! host client cid expected)
+      (.then (fn [object]
+               (open! (assoc host :admit! (fn [scope candidate]
+                        (and (true? ((:delivery-current! host)))
+                             (true? ((:admit-cid! host) cid expected))
+                             (true? ((:admit! host) scope candidate)))))
+                      object expected recipient identity)))))
