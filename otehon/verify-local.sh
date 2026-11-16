@@ -11,7 +11,7 @@ apex=$(cd "$1" && pwd -P)
 kotoba=$(cd "$2" && pwd -P)
 kbb=$(cd "$3" && pwd -P)
 root=$(CDPATH='' cd "$(dirname "$0")/.." && pwd -P)
-apex_rev=4830419852e81f29beced23477ed3fa92a4123d1
+apex_rev=422063df6d7eea61173e9bcaf1e144e74738dca0
 kotoba_rev=b7d31a1ee3aafdb4c33dd9f7d6b94ae423393b64
 kbb_rev=1675e6aab65d5a99e37840cc5012bc2eca6f4a07
 
@@ -34,7 +34,10 @@ node "$apex/otehon/owner-store/stage-dango.mjs" "$kotoba" "$out/dango"
 cp "$root/otehon/test/yoro/private_message_test.cljc" "$out/test-src/yoro/private_message_test.cljs"
 cp "$root/otehon/test/yoro/private_message_delivery_test.cljc" "$out/test-src/yoro/private_message_delivery_test.cljs"
 cp "$root/otehon/test/yoro/passkey_seal_test.cljc" "$out/test-src/yoro/passkey_seal_test.cljs"
+cp "$root/otehon/test/yoro/snapshot_host_test.cljc" "$out/test-src/yoro/snapshot_host_test.cljs"
 cd "$out/deps"
+node "$kbb/cli.js" -cp "$out/dango:$out/envelope:$apex/otehon/owner-store/lib:$root/otehon/src:$out/test-src" \
+  -e '(require (quote yoro.snapshot-host-test))'
 node "$kbb/cli.js" -cp "$out/dango:$out/envelope:$apex/otehon/owner-store/lib:$root/otehon/src:$out/test-src" \
   -e '(require (quote yoro.private-message-test))'
 node "$kbb/cli.js" -cp "$out/dango:$out/envelope:$apex/otehon/owner-store/lib:$root/otehon/src:$out/test-src" \
