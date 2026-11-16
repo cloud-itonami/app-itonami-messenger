@@ -1,6 +1,7 @@
 (ns yoro.passkey-seal-test
   (:require ["node:crypto" :as crypto] ["node:fs" :as fs] ["node:path" :as path]
-            [yoro.private-message :as message]
+            [yoro.private-message :as message] [yoro.otehon-delivery-host :as delivery]
+            [awai.browser-shared-object :as wire] [multiformats.core :as mf]
             [awai.passkey-store :as store] [awai.recipient-proof-store :as persisted] [awai.otehon-passkey :as otehon]
             [dango.chain :as dango] [ed25519.sign :as ed] [envelope.keystore :as keys] [envelope.seal :as seal]
             [webauthn.adapters.edge :as edge] [webauthn.virtual-authenticator :as virtual]))
@@ -41,9 +42,24 @@
                                  :grant {:caps #{[:data/read resource]} :holder sender :before 200} :caveats []}))
             others [{:holder sender :presentation sender-presentation :pub (:pub sender-key) :pq-pub (:pq-pub sender-key)}]
             payload {:id "message-1" :thread "thread-1" :author sender :text "hello" :sent-at 100}
-            host {:recipient-host recipient-host :request! request! :resource resource :now! clock :sender sender
-                  :policy! (fn [] {:roots #{(ed/public-key seed)} :revoked #{} :fresh-until 150
-                                    :bindings {holder (:recipient-key identity) sender (:recipient-key sender-key)}})}
+            revoked (atom #{}) stored (atom nil) allowed (atom nil) writes (atom 0)
+            expected {:resource resource :recipients #{holder sender} :author sender :thread "thread-1" :id "message-1"}
+            byte-count (.-length (.encode (js/TextEncoder.) (js/JSON.stringify (clj->js payload))))
+            host (delivery/bind!
+                   {:recipient-host recipient-host :request! request! :resource resource :now! clock :sender sender
+                    :policy! (fn [] {:roots #{(ed/public-key seed)} :revoked @revoked :fresh-until 150
+                                     :bindings {holder (:recipient-key identity) sender (:recipient-key sender-key)}})
+                    :delivery-grants! (fn [] {:byte-count byte-count :recipients
+                      [{:holder holder :presentation presentation :fingerprint (:recipient-key identity)}
+                       {:holder sender :presentation sender-presentation :fingerprint (:recipient-key sender-key)}]})
+                    :delivery-current! (fn [] true)
+                    :admit-cid! (fn [cid basis] (and (= cid @allowed) (= expected basis)))
+                    :admit! (fn [basis _] (= expected basis))
+                    :authorization! (fn [_] (js/Promise.resolve "Biscuit synthetic"))}
+                   db (:credential-id auth) holder)
+            client {:put-block! (fn [cid bytes authz] (check (= authz "Biscuit synthetic"))
+                                  (swap! writes inc) (reset! stored (js/Uint8Array.from bytes)) (js/Promise.resolve cid))
+                    :get-block (fn [_] (js/Promise.resolve (js/Uint8Array.from @stored)))}
             nonce (edge/b64url->bytes (:nonce issued))]
         (-> (denied #(message/prepare-passkey-seal! host (assoc payload :author "did:key:wrong") nonce (:pub identity) (:pq-pub identity) presentation others))
             (.then (fn [_] (check (zero? @calls))
@@ -54,12 +70,17 @@
                 (check (= 1 @calls))
                 (-> pending
                     (.then (fn [sealed]
-                      (js/Promise.all #js [(message/open! (assoc host :admit! (fn [_ _] true)) sealed
-                                             {:resource resource :recipients #{holder sender} :author sender :thread "thread-1" :id "message-1"} holder identity)
-                                           (message/open! (assoc host :admit! (fn [_ _] true)) sealed
-                                             {:resource resource :recipients #{holder sender} :author sender :thread "thread-1" :id "message-1"} sender sender-key)])))
-                    (.then (fn [opened] (doseq [plain (array-seq opened)]
-                                          (check (= payload plain)))
-                             (denied #((:confirm! prepared)))))))))))))
+                      (reset! allowed (mf/cidv1-raw (wire/encode sealed)))
+                      (message/publish! host client sealed expected)))
+                    (.then (fn [cid] (check (= 1 @writes))
+                      (message/receive! host client cid expected holder identity)))
+                    (.then (fn [opened] (check (= payload opened))
+                      (let [decision (dango/verify presentation {:roots #{(ed/public-key seed)} :revoked #{}
+                           :request {:req/kind :data/read :req/resource resource :req/holder holder :req/now 100 :req/bytes byte-count}})]
+                        (reset! revoked #{(first (:dango/cids decision))}))
+                      (denied #(message/receive! host client @allowed expected holder identity))))
+                    (.then (fn [_] (reset! revoked #{}) (check (store/revoke! db (:credential-id auth)))
+                      (denied #(message/receive! host client @allowed expected holder identity))))
+                    (.then (fn [_] (denied #((:confirm! prepared)))))))))))))
     (.then (fn [_] (.close db) (println (js/JSON.stringify #js {:passed true :scope "synthetic Yoro sender and recipient Passkey proof"}))))
     (.catch (fn [e] (.close db) (js/console.error e) (set! (.-exitCode js/process) 1))))

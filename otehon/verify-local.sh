@@ -11,7 +11,7 @@ apex=$(cd "$1" && pwd -P)
 kotoba=$(cd "$2" && pwd -P)
 kbb=$(cd "$3" && pwd -P)
 root=$(CDPATH='' cd "$(dirname "$0")/.." && pwd -P)
-apex_rev=6249c51655c119e7fdf1b1c770c32737caff0cde
+apex_rev=9e9462242b5c1d7bb81bfe420bc9bbf566b4971b
 kotoba_rev=b7d31a1ee3aafdb4c33dd9f7d6b94ae423393b64
 kbb_rev=1675e6aab65d5a99e37840cc5012bc2eca6f4a07
 
@@ -23,7 +23,7 @@ git -C "$kbb" diff --quiet
 git -C "$kbb" diff --cached --quiet
 git -C "$kotoba" cat-file -e "$kotoba_rev^{commit}"
 
-mkdir -p "$root/.agent-output"
+mkdir -p "$root/.agent-output/.agent-output"
 out=$(mktemp -d "$root/.agent-output/yoro-check.XXXXXX")
 mkdir -p "$out/deps" "$out/test-src/yoro"
 cp "$apex/otehon/owner-store/package.json" "$apex/otehon/owner-store/package-lock.json" "$out/deps/"
@@ -32,9 +32,12 @@ node "$apex/otehon/owner-store/stage.mjs" "$kotoba" "$out/envelope"
 node "$apex/otehon/owner-store/stage-dango.mjs" "$kotoba" "$out/dango"
 cp "$root/otehon/test/yoro/private_message_test.cljc" "$out/test-src/yoro/private_message_test.cljs"
 cp "$root/otehon/test/yoro/private_message_delivery_test.cljc" "$out/test-src/yoro/private_message_delivery_test.cljs"
+cp "$root/otehon/test/yoro/passkey_seal_test.cljc" "$out/test-src/yoro/passkey_seal_test.cljs"
 cd "$out/deps"
 node "$kbb/cli.js" -cp "$out/dango:$out/envelope:$apex/otehon/owner-store/lib:$root/otehon/src:$out/test-src" \
   -e '(require (quote yoro.private-message-test))'
 node "$kbb/cli.js" -cp "$out/dango:$out/envelope:$apex/otehon/owner-store/lib:$root/otehon/src:$out/test-src" \
   -e '(require (quote yoro.private-message-delivery-test))'
+node "$kbb/cli.js" -cp "$out/dango:$out/envelope:$apex/otehon/owner-store/lib:$root/otehon/src:$out/test-src" \
+  -e '(require (quote yoro.passkey-seal-test))'
 echo "Yoro local test evidence: $out"
