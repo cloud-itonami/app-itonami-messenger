@@ -1,7 +1,7 @@
 (ns yoro.private-message-delivery-test
   (:require [yoro.private-message :as message] [awai.browser-shared-object :as wire]
             [dango.chain :as dango] [ed25519.sign :as ed]
-            [envelope.keystore :as keys] [envelope.seal-sync :as crypto]
+            [envelope.keystore :as keys] [envelope.seal :as seal] [envelope.seal-sync :as crypto]
             [multiformats.core :as mf]))
 
 (defn check [condition] (when-not condition (throw (js/Error. "Yoro delivery test failed"))))
@@ -25,12 +25,13 @@
     (.then (fn [[afp bfp]]
       (let [policy {:roots #{(ed/public-key seed)} :revoked #{} :fresh-until 150 :bindings {sender afp recipient bfp}}
             sealing {:sender sender :resource resource :now! (fn [] 100) :policy! (fn [] policy)}
-            stored (atom {}) writes (atom 0) current (atom true) allowed (atom nil)
+            stored (atom {}) writes (atom 0) current (atom true) allowed (atom nil) fingerprints (atom {sender afp recipient bfp})
             client {:put-block! (fn [cid bytes auth]
                                   (check (= auth "Biscuit synthetic")) (swap! writes inc)
                                   (swap! stored assoc cid (clone bytes)) (js/Promise.resolve cid))
                     :get-block (fn [cid] (js/Promise.resolve (some-> (get @stored cid) clone)))}
             host {:delivery-current! (fn [] @current)
+                  :delivery-fingerprints! (fn [] @fingerprints)
                   :admit-cid! (fn [cid basis] (and (= cid @allowed) (= expected basis)))
                   :authorization! (fn [_] (js/Promise.resolve "Biscuit synthetic"))
                   :admit! (fn [basis _] (= expected basis))}]
@@ -39,6 +40,8 @@
               (let [cid (mf/cidv1-raw (wire/encode sealed))]
                 (reset! allowed cid)
                 (-> (denied #(message/publish! host client sealed (assoc expected :thread "other")))
+                    (.then (fn [_] (denied #(message/publish! host client
+                                  (assoc-in sealed [:envelope :envelope/recipients 1 :recipient/pub] (seal/b64url (js/Uint8Array. 32))) expected))))
                     (.then (fn [_] (check (zero? @writes)) (message/publish! host client sealed expected)))
                     (.then (fn [published]
                       (check (= cid published)) (check (= 1 @writes))
@@ -48,6 +51,9 @@
                       (let [revoking (assoc host :authorization! (fn [_] (reset! current false) (js/Promise.resolve "Biscuit synthetic")))]
                         (denied #(message/publish! revoking client sealed expected)))))
                     (.then (fn [_] (check (= 1 @writes)) (reset! current true)
+                      (let [rotating (assoc host :authorization! (fn [_] (swap! fingerprints assoc recipient afp) (js/Promise.resolve "Biscuit synthetic")))]
+                        (denied #(message/publish! rotating client sealed expected)))))
+                    (.then (fn [_] (check (= 1 @writes)) (reset! fingerprints {sender afp recipient bfp})
                       (denied #(message/receive! host client cid (assoc expected :id "other") recipient (select-keys b [:priv :pq-priv])))))
                     (.then (fn [_] (reset! current false)
                       (denied #(message/receive! host client cid expected recipient (select-keys b [:priv :pq-priv])))))

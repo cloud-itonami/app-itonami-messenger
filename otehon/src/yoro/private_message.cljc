@@ -4,6 +4,7 @@
    This namespace performs no network, consent or key discovery."
   (:require [awai.browser-authorized-envelope :as envelope]
             [awai.browser-recipient-envelope :as recipient-envelope]
+            [awai.delivery-key-binding :as key-binding]
             [awai.private-message-blocks :as blocks]))
 
 (defn refuse [] (throw (ex-info "private message refused" {})))
@@ -78,7 +79,8 @@
    runtime; this does not discover recipients or establish a signed basis."
   [host client object expected]
   (when-not (expected? expected) (refuse))
-  (blocks/publish! host client object expected))
+  (-> (key-binding/verify! host object expected)
+      (.then (fn [bindings] (blocks/publish! (key-binding/guarded-host host expected bindings) client object expected)))))
 
 (defn receive!
   "Receive and open an exact host-authenticated message. Recheck the CID and
@@ -86,10 +88,15 @@
   [host client cid expected recipient identity]
   (when-not (and (expected? expected) (map? host) (fn? (:delivery-current! host))
                  (fn? (:admit-cid! host)) (fn? (:admit! host))) (refuse))
-  (-> (blocks/receive! host client cid expected)
-      (.then (fn [object]
-               (open! (assoc host :admit! (fn [scope candidate]
-                        (and (true? ((:delivery-current! host)))
-                             (true? ((:admit-cid! host) cid expected))
-                             (true? ((:admit! host) scope candidate)))))
-                      object expected recipient identity)))))
+  (let [bindings (key-binding/capture! host expected)
+        guarded (key-binding/guarded-host host expected bindings)]
+    (-> (blocks/receive! guarded client cid expected)
+        (.then (fn [object]
+                 (-> (key-binding/verify! guarded object expected)
+                     (.then (fn [actual]
+                       (when-not (= actual bindings) (refuse))
+                       (open! (assoc host :admit! (fn [scope candidate]
+                                (and (true? ((:delivery-current! guarded)))
+                                     (true? ((:admit-cid! host) cid expected))
+                                     (true? ((:admit! host) scope candidate)))))
+                              object expected recipient identity)))))))))
